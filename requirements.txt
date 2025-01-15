@@ -1,0 +1,4 @@
+telethon==1.30
+schedule==1.1.0
+python-dotenv==1.0.0
+  
