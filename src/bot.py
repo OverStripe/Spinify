@@ -2,7 +2,7 @@ from telethon import TelegramClient, events
 import os
 import json
 from src.approval_handler import handle_approve
-from src.account_manager.py import handle_login
+from src.account_manager import handle_login
 from src.group_manager import handle_add_group, handle_list_groups
 
 # Load Configurations
