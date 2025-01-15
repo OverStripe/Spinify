@@ -24,15 +24,16 @@ async def handle_add_group(event):
     if group_username not in groups[user_id]:
         groups[user_id].append(group_username)
         save_groups(groups)
-        await event.reply(f"✅ Group '{group_username}' added successfully.")
+        await event.reply(f"✅ **Group `{group_username}` added successfully.**")
     else:
-        await event.reply(f"⚠️ Group '{group_username}' is already in your list.")
+        await event.reply(f"⚠️ **Group `{group_username}` is already in your list.**")
 
 async def handle_list_groups(event):
     user_id = str(event.sender_id)
     groups = load_groups().get(user_id, [])
 
     if groups:
-        await event.reply(f"📋 Your Groups:\n" + "\n".join(groups))
+        group_list = "\n".join([f"- `{group}`" for group in groups])
+        await event.reply(f"📋 **Your Groups:**\n{group_list}")
     else:
-        await event.reply("ℹ️ You haven't added any groups yet.")
+        await event.reply("ℹ️ **You haven't added any groups yet.**")
