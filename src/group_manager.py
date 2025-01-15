@@ -2,7 +2,6 @@ import json
 
 GROUPS_DB = "data/groups.json"
 
-# Load groups data
 def load_groups():
     try:
         with open(GROUPS_DB, "r") as file:
@@ -10,24 +9,30 @@ def load_groups():
     except FileNotFoundError:
         return {}
 
-# Save groups data
 def save_groups(data):
     with open(GROUPS_DB, "w") as file:
         json.dump(data, file, indent=4)
 
-# Add a group
-async def add_group(event, user_id, group_username):
+async def handle_add_group(event):
+    user_id = str(event.sender_id)
+    group_username = event.pattern_match.group(1)
+
     groups = load_groups()
+    if user_id not in groups:
+        groups[user_id] = []
 
-    # Ensure user has an entry
-    if str(user_id) not in groups:
-        groups[str(user_id)] = []
-
-    # Add the group if not already in the list
-    if group_username not in groups[str(user_id)]:
-        groups[str(user_id)].append(group_username)
+    if group_username not in groups[user_id]:
+        groups[user_id].append(group_username)
         save_groups(groups)
-        await event.reply(f"✅ Group '{group_username}' has been added successfully.")
+        await event.reply(f"✅ Group '{group_username}' added successfully.")
     else:
         await event.reply(f"⚠️ Group '{group_username}' is already in your list.")
-      
+
+async def handle_list_groups(event):
+    user_id = str(event.sender_id)
+    groups = load_groups().get(user_id, [])
+
+    if groups:
+        await event.reply(f"📋 Your Groups:\n" + "\n".join(groups))
+    else:
+        await event.reply("ℹ️ You haven't added any groups yet.")
