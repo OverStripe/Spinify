@@ -1,0 +1,217 @@
+import os
+import asyncio
+import pickle
+import logging
+import aiofiles
+from dotenv import load_dotenv
+from aiogram import Bot, Dispatcher, types
+from aiogram.types import ParseMode
+from aiogram.utils import executor
+from telethon import TelegramClient, errors
+import random
+
+# 🌟 Load Environment Variables
+load_dotenv()
+API_ID = int(os.getenv("API_ID"))
+API_HASH = os.getenv("API_HASH")
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+OWNER_ID = int(os.getenv("OWNER_ID"))
+DEFAULT_INTERVAL = int(os.getenv("DEFAULT_INTERVAL", 600))  # Default: 10 min
+DATA_FILE = os.getenv("DATA_FILE", "bot_data.pkl")
+
+# 🌟 Initialize Aiogram Bot & Dispatcher
+bot = Bot(token=BOT_TOKEN, parse_mode=ParseMode.HTML)
+dp = Dispatcher(bot)
+
+# 🌟 Logging setup
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# 🌟 Global Variables
+group_list = {}
+ad_message = "🚀 Boost your business with our exclusive deals! Contact us now!"
+schedule_task = None
+session_files = []  # Available session files
+clients = []  # Telethon clients
+cooldown_time = 60  # Cooldown for FLOOD errors
+
+# 🌟 Default Telegram Client (Used If No Other Accounts Exist)
+default_client = TelegramClient("default_session", API_ID, API_HASH)
+
+async def start_default_client():
+    """Start the default Telegram account if no sessions exist."""
+    await default_client.start()
+    clients.append(default_client)
+    logger.info("🌟 Default Telegram Account Initialized!")
+
+# 🌟 Load Data from File
+def load_data():
+    global group_list, ad_message, session_files
+    if os.path.exists(DATA_FILE):
+        with open(DATA_FILE, "rb") as f:
+            data = pickle.load(f)
+            group_list = data.get("group_list", {})
+            ad_message = data.get("ad_message", ad_message)
+            session_files = data.get("session_files", [])
+        logger.info("📁 Data Loaded Successfully!")
+
+# 🌟 Save Data Persistently
+def save_data():
+    with open(DATA_FILE, "wb") as f:
+        pickle.dump({"group_list": group_list, "ad_message": ad_message, "session_files": session_files}, f)
+    logger.info("📁 Data Saved Successfully!")
+
+async def load_sessions():
+    """Load Telegram session files dynamically and fetch joined groups."""
+    global clients, group_list
+    clients.clear()
+    
+    for session_file in session_files:
+        client = TelegramClient(session_file, API_ID, API_HASH)
+        await client.start()
+        clients.append(client)
+        logger.info(f"🌟 Loaded Session: {session_file}")
+
+        # 🌟 Fetch and add joined groups
+        async for dialog in client.iter_dialogs():
+            if dialog.is_group:
+                group_list[dialog.entity.id] = DEFAULT_INTERVAL
+
+    # If No Sessions Exist, Use Default Account
+    if not clients:
+        await start_default_client()
+
+async def send_message_with_retry(client, group):
+    """Sends a message with error handling & cooldowns."""
+    global cooldown_time
+    try:
+        async with client:
+            await client.send_message(group, ad_message)
+            logger.info(f"✅ Ad Sent to {group} Using {client.session.filename}")
+            return True
+    except errors.FloodWaitError as e:
+        cooldown_time = min(e.seconds, 600)  # Max 10 min cooldown
+        logger.warning(f"⚠️ FLOOD_WAIT Error! Cooling Down for {cooldown_time} Seconds.")
+        await asyncio.sleep(cooldown_time)
+        return False
+    except Exception as e:
+        logger.warning(f"⚠️ Error Sending to {group}: {e}")
+        return False
+
+async def scheduled_ad_posting():
+    """Handles automatic ad posting with multiple accounts."""
+    account_index = 0  # Track Active Account
+
+    while True:
+        if not clients:
+            logger.warning("⚠️ No Telegram Accounts Available! Using Default Account.")
+            await start_default_client()
+
+        for group, interval in group_list.items():
+            client = clients[account_index % len(clients)]  # Rotate Accounts
+            account_index += 1
+
+            if not await send_message_with_retry(client, group):
+                await asyncio.sleep(10)
+
+            await asyncio.sleep(interval + random.randint(5, 20))  # Random Jitter to Avoid Spam Detection
+
+# 🌟 Start Command
+@dp.message_handler(commands=["start"])
+async def start_command(message: types.Message):
+    """Bot Start Message with UI."""
+    if message.from_user.id == OWNER_ID:
+        await message.reply("🌟 **Ad Bot Running!** 🌟\n\nUse `/login session` to add accounts.")
+    else:
+        await message.reply("⚠️ Unauthorized Access!")
+
+# 🌟 Login Session Command
+@dp.message_handler(commands=["login"])
+async def login_session(message: types.Message):
+    """Handles Session File Upload Requests."""
+    if message.from_user.id == OWNER_ID:
+        await message.reply("📂 **Upload Your Telethon Session File (.session) Now!**")
+    else:
+        await message.reply("⚠️ Unauthorized Access!")
+
+# 🌟 Receive Session File
+@dp.message_handler(content_types=types.ContentType.DOCUMENT)
+async def receive_session_file(message: types.Message):
+    """Handles Session File Upload & Saves It."""
+    if message.from_user.id == OWNER_ID:
+        document = message.document
+        if not document.file_name.endswith(".session"):
+            await message.reply("⚠️ Invalid File Type! Upload a **.session** File Only.")
+            return
+
+        session_file_path = f"./sessions/{document.file_name}"
+        os.makedirs("sessions", exist_ok=True)
+
+        file = await bot.download_file_by_id(document.file_id)
+        async with aiofiles.open(session_file_path, "wb") as f:
+            await f.write(file)
+
+        session_files.append(session_file_path)
+        save_data()
+        await load_sessions()
+        
+        await message.reply(f"✅ **Session File {document.file_name} Added Successfully!**")
+    else:
+        await message.reply("⚠️ Unauthorized Access!")
+
+# 🌟 Set Ad Command
+@dp.message_handler(commands=["set_ad"])
+async def set_ad(message: types.Message):
+    """Sets a New Ad Message & Starts Auto Posting."""
+    if message.from_user.id == OWNER_ID:
+        global ad_message, schedule_task
+        args = message.text.split(maxsplit=1)
+        if len(args) < 2:
+            await message.reply("⚠️ Usage: `/set_ad Your Ad Message`")
+            return
+        
+        ad_message = args[1].strip()
+        save_data()
+
+        if schedule_task:
+            schedule_task.cancel()
+
+        schedule_task = asyncio.create_task(scheduled_ad_posting())
+
+        await message.reply("✅ **Ad Updated & Auto Posting Started!**")
+        logger.info(f"Updated Ad: {ad_message}")
+    else:
+        await message.reply("⚠️ Unauthorized Access!")
+
+# 🌟 Manual Ad Posting
+@dp.message_handler(commands=["post"])
+async def post_ads(message: types.Message):
+    """Manually Sends Ads to All Groups."""
+    if message.from_user.id == OWNER_ID:
+        if not clients:
+            await message.reply("⚠️ No Telegram Accounts Available! Use `/login session` First.")
+            return
+
+        for group in group_list.keys():
+            client = clients[random.randint(0, len(clients) - 1)]  # Random Account Selection
+
+            if not await send_message_with_retry(client, group):
+                await asyncio.sleep(10)
+
+        await message.reply("✅ **Ad Manually Sent to All Groups!**")
+    else:
+        await message.reply("⚠️ Unauthorized Access!")
+
+# 🌟 Main Function
+async def main():
+    """Start Bot & Run Tasks."""
+    load_data()
+    await load_sessions()
+
+    global schedule_task
+    schedule_task = asyncio.create_task(scheduled_ad_posting())
+
+    executor.start_polling(dp)
+
+if __name__ == "__main__":
+    asyncio.run(main())
