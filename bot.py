@@ -4,13 +4,12 @@ import pickle
 import logging
 import aiofiles
 from dotenv import load_dotenv
-from aiogram import Bot, Dispatcher, types
+from aiogram import Bot, types
 from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
 from aiogram.types import Message
 from aiogram.filters import Command
 from aiogram.utils.markdown import hbold
-from aiogram import ApplicationBuilder
 from telethon import TelegramClient, errors
 import random
 
@@ -23,8 +22,8 @@ OWNER_ID = int(os.getenv("OWNER_ID"))
 DEFAULT_INTERVAL = int(os.getenv("DEFAULT_INTERVAL", 600))  # Default: 10 min
 DATA_FILE = os.getenv("DATA_FILE", "bot_data.pkl")
 
-# 🌟 Initialize Aiogram Bot & Dispatcher using ApplicationBuilder
-app = ApplicationBuilder().token(BOT_TOKEN).build()
+# 🌟 Initialize Aiogram Bot
+bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 
 # 🌟 Logging setup
 logging.basicConfig(level=logging.INFO)
@@ -120,29 +119,32 @@ async def scheduled_ad_posting():
             await asyncio.sleep(interval + random.randint(5, 20))  # Random Jitter to Avoid Spam Detection
 
 # 🌟 Start Command
-async def start_command(update: types.Update, context):
+@bot.message_handler(commands=["start"])
+async def start_command(message: Message):
     """Bot Start Message with UI."""
-    if update.message.from_user.id == OWNER_ID:
-        await update.message.reply_text(f"🌟 **Ad Bot Running!** 🌟\n\nUse {hbold('/login session')} to add accounts.")
+    if message.from_user.id == OWNER_ID:
+        await message.answer(f"🌟 **Ad Bot Running!** 🌟\n\nUse {hbold('/login session')} to add accounts.")
     else:
-        await update.message.reply_text("⚠️ Unauthorized Access!")
+        await message.answer("⚠️ Unauthorized Access!")
 
 # 🌟 Login Session Command
-async def login_session(update: types.Update, context):
+@bot.message_handler(commands=["login"])
+async def login_session(message: Message):
     """Handles Session File Upload Requests."""
-    if update.message.from_user.id == OWNER_ID:
-        await update.message.reply_text("📂 **Upload Your Telethon Session File (.session) Now!**")
+    if message.from_user.id == OWNER_ID:
+        await message.answer("📂 **Upload Your Telethon Session File (.session) Now!**")
     else:
-        await update.message.reply_text("⚠️ Unauthorized Access!")
+        await message.answer("⚠️ Unauthorized Access!")
 
 # 🌟 Set Ad Command
-async def set_ad(update: types.Update, context):
+@bot.message_handler(commands=["set_ad"])
+async def set_ad(message: Message):
     """Sets a New Ad Message & Starts Auto Posting."""
-    if update.message.from_user.id == OWNER_ID:
+    if message.from_user.id == OWNER_ID:
         global ad_message, schedule_task
-        args = update.message.text.split(maxsplit=1)
+        args = message.text.split(maxsplit=1)
         if len(args) < 2:
-            await update.message.reply_text("⚠️ Usage: `/set_ad Your Ad Message`")
+            await message.answer("⚠️ Usage: `/set_ad Your Ad Message`")
             return
         
         ad_message = args[1].strip()
@@ -153,25 +155,20 @@ async def set_ad(update: types.Update, context):
 
         schedule_task = asyncio.create_task(scheduled_ad_posting())
 
-        await update.message.reply_text("✅ **Ad Updated & Auto Posting Started!**")
+        await message.answer("✅ **Ad Updated & Auto Posting Started!**")
     else:
-        await update.message.reply_text("⚠️ Unauthorized Access!")
-
-# 🌟 Register Commands with ApplicationBuilder
-app.add_handler(Command("start")(start_command))
-app.add_handler(Command("login")(login_session))
-app.add_handler(Command("set_ad")(set_ad))
+        await message.answer("⚠️ Unauthorized Access!")
 
 # 🌟 Main Function
-async def main():
+def main():
     """Start Bot & Run Tasks."""
     load_data()
-    await load_sessions()
+    asyncio.run(load_sessions())
 
     global schedule_task
     schedule_task = asyncio.create_task(scheduled_ad_posting())
 
-    await app.run_polling()
+    bot.polling()
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
