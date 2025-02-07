@@ -6,10 +6,11 @@ import aiofiles
 from dotenv import load_dotenv
 from aiogram import Bot, Dispatcher, types
 from aiogram.enums import ParseMode
-from aiogram.client.default import DefaultBotProperties  # ✅ Fix for aiogram 3.7+
+from aiogram.client.default import DefaultBotProperties
 from aiogram.types import Message
 from aiogram.filters import Command
 from aiogram.utils.markdown import hbold
+from aiogram import ApplicationBuilder
 from telethon import TelegramClient, errors
 import random
 
@@ -22,12 +23,8 @@ OWNER_ID = int(os.getenv("OWNER_ID"))
 DEFAULT_INTERVAL = int(os.getenv("DEFAULT_INTERVAL", 600))  # Default: 10 min
 DATA_FILE = os.getenv("DATA_FILE", "bot_data.pkl")
 
-# 🌟 Initialize Aiogram Bot & Dispatcher
-bot = Bot(
-    token=BOT_TOKEN,
-    default=DefaultBotProperties(parse_mode=ParseMode.HTML)  # ✅ Fix for aiogram 3.7+
-)
-dp = Dispatcher()
+# 🌟 Initialize Aiogram Bot & Dispatcher using ApplicationBuilder
+app = ApplicationBuilder().token(BOT_TOKEN).build()
 
 # 🌟 Logging setup
 logging.basicConfig(level=logging.INFO)
@@ -123,32 +120,29 @@ async def scheduled_ad_posting():
             await asyncio.sleep(interval + random.randint(5, 20))  # Random Jitter to Avoid Spam Detection
 
 # 🌟 Start Command
-@dp.message(Command("start"))
-async def start_command(message: Message):
+async def start_command(update: types.Update, context):
     """Bot Start Message with UI."""
-    if message.from_user.id == OWNER_ID:
-        await message.answer(f"🌟 **Ad Bot Running!** 🌟\n\nUse {hbold('/login session')} to add accounts.")
+    if update.message.from_user.id == OWNER_ID:
+        await update.message.reply_text(f"🌟 **Ad Bot Running!** 🌟\n\nUse {hbold('/login session')} to add accounts.")
     else:
-        await message.answer("⚠️ Unauthorized Access!")
+        await update.message.reply_text("⚠️ Unauthorized Access!")
 
 # 🌟 Login Session Command
-@dp.message(Command("login"))
-async def login_session(message: Message):
+async def login_session(update: types.Update, context):
     """Handles Session File Upload Requests."""
-    if message.from_user.id == OWNER_ID:
-        await message.answer("📂 **Upload Your Telethon Session File (.session) Now!**")
+    if update.message.from_user.id == OWNER_ID:
+        await update.message.reply_text("📂 **Upload Your Telethon Session File (.session) Now!**")
     else:
-        await message.answer("⚠️ Unauthorized Access!")
+        await update.message.reply_text("⚠️ Unauthorized Access!")
 
 # 🌟 Set Ad Command
-@dp.message(Command("set_ad"))
-async def set_ad(message: Message):
+async def set_ad(update: types.Update, context):
     """Sets a New Ad Message & Starts Auto Posting."""
-    if message.from_user.id == OWNER_ID:
+    if update.message.from_user.id == OWNER_ID:
         global ad_message, schedule_task
-        args = message.text.split(maxsplit=1)
+        args = update.message.text.split(maxsplit=1)
         if len(args) < 2:
-            await message.answer("⚠️ Usage: `/set_ad Your Ad Message`")
+            await update.message.reply_text("⚠️ Usage: `/set_ad Your Ad Message`")
             return
         
         ad_message = args[1].strip()
@@ -159,9 +153,14 @@ async def set_ad(message: Message):
 
         schedule_task = asyncio.create_task(scheduled_ad_posting())
 
-        await message.answer("✅ **Ad Updated & Auto Posting Started!**")
+        await update.message.reply_text("✅ **Ad Updated & Auto Posting Started!**")
     else:
-        await message.answer("⚠️ Unauthorized Access!")
+        await update.message.reply_text("⚠️ Unauthorized Access!")
+
+# 🌟 Register Commands with ApplicationBuilder
+app.add_handler(Command("start")(start_command))
+app.add_handler(Command("login")(login_session))
+app.add_handler(Command("set_ad")(set_ad))
 
 # 🌟 Main Function
 async def main():
@@ -172,7 +171,7 @@ async def main():
     global schedule_task
     schedule_task = asyncio.create_task(scheduled_ad_posting())
 
-    await dp.start_polling(bot)
+    await app.run_polling()
 
 if __name__ == "__main__":
     asyncio.run(main())
