@@ -4,7 +4,7 @@ import pickle
 import logging
 import aiofiles
 from dotenv import load_dotenv
-from aiogram import Bot, types
+from aiogram import Bot, Dispatcher, types
 from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
 from aiogram.types import Message
@@ -12,6 +12,7 @@ from aiogram.filters import Command
 from aiogram.utils.markdown import hbold
 from telethon import TelegramClient, errors
 import random
+from datetime import datetime
 
 # 🌟 Load Environment Variables
 load_dotenv()
@@ -22,12 +23,17 @@ OWNER_ID = int(os.getenv("OWNER_ID"))
 DEFAULT_INTERVAL = int(os.getenv("DEFAULT_INTERVAL", 600))  # Default: 10 min
 DATA_FILE = os.getenv("DATA_FILE", "bot_data.pkl")
 
-# 🌟 Initialize Aiogram Bot
-bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
-
 # 🌟 Logging setup
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    handlers=[logging.FileHandler("bot.log"), logging.StreamHandler()]
+)
 logger = logging.getLogger(__name__)
+
+# 🌟 Initialize Aiogram Bot & Dispatcher
+bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+dp = Dispatcher()
 
 # 🌟 Global Variables
 group_list = {}
@@ -119,7 +125,7 @@ async def scheduled_ad_posting():
             await asyncio.sleep(interval + random.randint(5, 20))  # Random Jitter to Avoid Spam Detection
 
 # 🌟 Start Command
-@bot.message_handler(commands=["start"])
+@dp.message(Command("start"))
 async def start_command(message: Message):
     """Bot Start Message with UI."""
     if message.from_user.id == OWNER_ID:
@@ -128,7 +134,7 @@ async def start_command(message: Message):
         await message.answer("⚠️ Unauthorized Access!")
 
 # 🌟 Login Session Command
-@bot.message_handler(commands=["login"])
+@dp.message(Command("login"))
 async def login_session(message: Message):
     """Handles Session File Upload Requests."""
     if message.from_user.id == OWNER_ID:
@@ -137,7 +143,7 @@ async def login_session(message: Message):
         await message.answer("⚠️ Unauthorized Access!")
 
 # 🌟 Set Ad Command
-@bot.message_handler(commands=["set_ad"])
+@dp.message(Command("set_ad"))
 async def set_ad(message: Message):
     """Sets a New Ad Message & Starts Auto Posting."""
     if message.from_user.id == OWNER_ID:
@@ -168,7 +174,12 @@ def main():
     global schedule_task
     schedule_task = asyncio.create_task(scheduled_ad_posting())
 
-    bot.polling()
+    # Log bot startup time
+    startup_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    logger.info(f"🚀 Bot Started at {startup_time}")
+
+    import aiogram
+    aiogram.executor.start_polling(dp, skip_updates=True)
 
 if __name__ == "__main__":
     main()
