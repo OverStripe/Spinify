@@ -7,7 +7,7 @@ from dotenv import load_dotenv
 from aiogram import Bot, Dispatcher, types
 from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
-from aiogram.types import Message, Document
+from aiogram.types import Message
 from aiogram.filters import Command
 from aiogram.utils.markdown import hbold
 from telethon import TelegramClient, errors
@@ -127,6 +127,7 @@ async def scheduled_ad_posting():
 @dp.message(Command("start"))
 async def start_command(message: Message):
     """Bot Start Message with UI."""
+    logger.info(f"📩 Received /start from {message.from_user.id}")
     if message.from_user.id == OWNER_ID:
         await message.answer(f"🌟 **Ad Bot Running!** 🌟\n\nUse {hbold('/login session')} to add accounts.")
     else:
@@ -136,6 +137,7 @@ async def start_command(message: Message):
 @dp.message(Command("login"))
 async def login_session(message: Message):
     """Handles Session File Upload Requests."""
+    logger.info(f"📩 Received /login from {message.from_user.id}")
     if message.from_user.id == OWNER_ID:
         await message.answer("📂 **Upload Your Telethon Session File (.session) Now!**")
     else:
@@ -145,6 +147,7 @@ async def login_session(message: Message):
 @dp.message(Command("set_ad"))
 async def set_ad(message: Message):
     """Sets a New Ad Message & Starts Auto Posting."""
+    logger.info(f"📩 Received /set_ad from {message.from_user.id}")
     if message.from_user.id == OWNER_ID:
         global ad_message
         args = message.text.split(maxsplit=1)
@@ -163,6 +166,7 @@ async def set_ad(message: Message):
 @dp.message(Command("post"))
 async def post_ads(message: Message):
     """Manually Sends Ads to All Groups."""
+    logger.info(f"📩 Received /post from {message.from_user.id}")
     if message.from_user.id == OWNER_ID:
         for group in group_list.keys():
             client = random.choice(clients) if clients else default_client
@@ -178,7 +182,9 @@ async def main():
     await load_sessions()
     logger.info(f"🚀 Bot Started at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     asyncio.create_task(scheduled_ad_posting())
-    await dp.start_polling(bot)
+
+    # ✅ FIXED: Use `dp.run_polling(bot)`
+    await dp.run_polling(bot)
 
 if __name__ == "__main__":
     asyncio.run(main())
