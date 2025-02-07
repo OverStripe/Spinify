@@ -1,6 +1,6 @@
-telethon
-python-dotenv
-aiogram
-aiofiles
+telethon>=1.38.1
+aiogram>=3.7.0
+python-dotenv>=1.0.1
+aiofiles>=24.1.0
 
   
