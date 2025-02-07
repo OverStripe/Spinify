@@ -3,156 +3,160 @@ import time
 import pickle
 import logging
 import telebot
+import schedule
+import threading
 from dotenv import load_dotenv
 from telethon.sync import TelegramClient
 from telethon.sessions import StringSession
 from telethon.errors import FloodWaitError
 
-# 🌟 Load Environment Variables
+# Load Environment Variables
 load_dotenv()
 API_ID = int(os.getenv("API_ID"))
 API_HASH = os.getenv("API_HASH")
-SESSION_STRING = os.getenv("SESSION_STRING")
-BOT_TOKEN = os.getenv("BOT_TOKEN")  # Telegram Bot Token
+BOT_TOKEN = os.getenv("BOT_TOKEN")
 OWNER_ID = int(os.getenv("OWNER_ID"))
-DEFAULT_INTERVAL = int(os.getenv("DEFAULT_INTERVAL", 600))  # Default: 10 min
+DEFAULT_INTERVAL = int(os.getenv("DEFAULT_INTERVAL", 600))
+LOG_CHAT_ID = int(os.getenv("LOG_CHAT_ID"))
 DATA_FILE = "bot_data.pkl"
+SESSION_FILE = "session.pkl"
+APPROVED_USERS_FILE = "approved_users.pkl"
 
-# 🌟 Logging Setup
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s",
-    handlers=[logging.FileHandler("bot.log"), logging.StreamHandler()]
-)
-logger = logging.getLogger(__name__)
-
-# 🌟 Initialize Telethon Client (No phone required)
-if SESSION_STRING:
-    client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
-    logger.info("✅ Using SESSION_STRING for login...")
-else:
-    logger.error("❌ SESSION_STRING is missing! Please generate one.")
-
-# 🌟 Connect to Telegram
-client.connect()
-
-# 🌟 Check if logged in
-if not client.is_user_authorized():
-    logger.error("❌ Session Expired! Generate a new SESSION_STRING.")
-    exit()
-
-logger.info("✅ Logged in successfully!")
-
-# 🌟 Initialize Telegram Bot (for management)
+# Initialize Telegram Bot
 bot = telebot.TeleBot(BOT_TOKEN)
 
-# 🌟 Global Variables
-group_list = {}  # Stores group names and intervals
-ad_message = os.getenv("DEFAULT_AD_MESSAGE", "🚀 Boost your business now!")
+# Logging Setup
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-# 🌟 Load Data from File
-def load_data():
-    global group_list, ad_message
-    if os.path.exists(DATA_FILE):
-        with open(DATA_FILE, "rb") as f:
-            data = pickle.load(f)
-            group_list = data.get("group_list", {})
-            ad_message = data.get("ad_message", ad_message)
-        logger.info("📁 Data Loaded Successfully!")
+def send_log(message):
+    """Sends logs to Telegram Chat"""
+    try:
+        bot.send_message(LOG_CHAT_ID, f"▪ **LOG:** {message}", parse_mode="Markdown")
+    except Exception as e:
+        print(f"ERROR: Failed to send log: {e}")
 
-# 🌟 Save Data Persistently
-def save_data():
-    with open(DATA_FILE, "wb") as f:
-        pickle.dump({"group_list": group_list, "ad_message": ad_message}, f)
-    logger.info("📁 Data Saved Successfully!")
+# Global Variables
+client = None
+group_list = {}
+ad_message = os.getenv("DEFAULT_AD_MESSAGE", "▪ New Promotion ▪\n\nBoost your business! Contact @YourUsername")
+approved_users = set()
 
-# 🌟 Fetch Joined Groups Automatically
-def fetch_groups():
-    """Fetch all joined groups and add them to the list."""
-    logger.info("🔍 Fetching joined groups...")
-    group_list.clear()
-    for dialog in client.iter_dialogs():
-        if dialog.is_group:
-            group_list[dialog.id] = DEFAULT_INTERVAL
-            logger.info(f"✅ Added Group: {dialog.name} ({dialog.id})")
-    save_data()
-    return len(group_list)
+# Load Approved Users
+def load_approved_users():
+    global approved_users
+    if os.path.exists(APPROVED_USERS_FILE):
+        with open(APPROVED_USERS_FILE, "rb") as f:
+            approved_users = pickle.load(f)
+    send_log("✔ Approved Users Loaded")
 
-# 🌟 Post Ads to Groups
-def post_ads():
-    """Sends ads to all joined groups."""
-    logger.info("🚀 Starting Ad Posting...")
-    for group_id in group_list.keys():
-        try:
-            client.send_message(group_id, ad_message)
-            logger.info(f"✅ Ad Sent to {group_id}")
-            time.sleep(10)  # Prevent spam bans
-        except FloodWaitError as e:
-            logger.warning(f"⚠️ FLOOD_WAIT Error! Cooling Down for {e.seconds} Seconds.")
-            time.sleep(e.seconds)  # Wait before retrying
-        except Exception as e:
-            logger.warning(f"⚠️ Failed to send message to {group_id}: {e}")
+# Save Approved Users
+def save_approved_users():
+    with open(APPROVED_USERS_FILE, "wb") as f:
+        pickle.dump(approved_users, f)
+    send_log("✔ Approved Users Updated")
 
-# 🌟 Telegram Bot Commands
-@bot.message_handler(commands=["start"])
-def start(message):
-    """Handles the /start command."""
-    if message.chat.id == OWNER_ID:
-        bot.send_message(message.chat.id, "🌟 Welcome to the Telegram Ad Bot! Use /help for commands.")
-    else:
-        bot.send_message(message.chat.id, "❌ Unauthorized!")
-
-@bot.message_handler(commands=["help"])
-def help_command(message):
-    """Shows available commands."""
-    if message.chat.id == OWNER_ID:
-        bot.send_message(message.chat.id,
-            "🔹 **Available Commands:**\n"
-            "/fetch_groups - Fetch joined groups\n"
-            "/list_groups - Show all groups\n"
-            "/set_ad <message> - Set new ad message\n"
-            "/post - Post ad to all groups"
-        )
-
-@bot.message_handler(commands=["fetch_groups"])
-def fetch_groups_command(message):
-    """Handles /fetch_groups command."""
-    if message.chat.id == OWNER_ID:
-        count = fetch_groups()
-        bot.send_message(message.chat.id, f"✅ {count} groups fetched successfully!")
-
-@bot.message_handler(commands=["list_groups"])
-def list_groups_command(message):
-    """Handles /list_groups command."""
-    if message.chat.id == OWNER_ID:
-        if not group_list:
-            bot.send_message(message.chat.id, "📂 No groups found! Run /fetch_groups first.")
-        else:
-            groups = "\n".join([f"🔹 `{gid}`" for gid in group_list.keys()])
-            bot.send_message(message.chat.id, f"📂 **Joined Groups:**\n{groups}")
-
-@bot.message_handler(commands=["set_ad"])
-def set_ad_command(message):
-    """Handles /set_ad command."""
+# Approve New Users
+@bot.message_handler(commands=["approve"])
+def approve_user(message):
     if message.chat.id == OWNER_ID:
         args = message.text.split(maxsplit=1)
         if len(args) < 2:
-            bot.send_message(message.chat.id, "⚠️ Usage: `/set_ad Your Ad Message`")
+            bot.send_message(message.chat.id, "Usage: `/approve <user_id>`", parse_mode="Markdown")
+            return
+        
+        user_id = int(args[1].strip())
+        approved_users.add(user_id)
+        save_approved_users()
+        bot.send_message(message.chat.id, f"✔ User {user_id} Approved", parse_mode="Markdown")
+        send_log(f"✔ User {user_id} Approved by Owner")
+    else:
+        bot.send_message(message.chat.id, "✖ You are not authorized", parse_mode="Markdown")
+
+# Check if User is Approved
+def is_user_approved(user_id):
+    return user_id in approved_users or user_id == OWNER_ID
+
+# Save & Load Ad Message
+def save_ad_message():
+    with open(DATA_FILE, "wb") as f:
+        pickle.dump({"group_list": group_list, "ad_message": ad_message}, f)
+    send_log("✔ Ad Message Updated")
+
+def load_ad_message():
+    global ad_message
+    if os.path.exists(DATA_FILE):
+        with open(DATA_FILE, "rb") as f:
+            data = pickle.load(f)
+            ad_message = data.get("ad_message", ad_message)
+
+# Set Ad Message
+@bot.message_handler(commands=["set_ad"])
+def set_ad_command(message):
+    if message.chat.id == OWNER_ID:
+        args = message.text.split(maxsplit=1)
+        if len(args) < 2:
+            bot.send_message(message.chat.id, "Usage: `/set_ad <message>`", parse_mode="Markdown")
             return
         
         global ad_message
         ad_message = args[1].strip()
-        save_data()
-        bot.send_message(message.chat.id, "✅ **Ad Message Updated!**")
+        save_ad_message()
+        bot.send_message(message.chat.id, "✔ Ad Message Updated")
+        send_log(f"✔ New Ad Message Set:\n{ad_message}")
+    else:
+        bot.send_message(message.chat.id, "✖ You are not authorized", parse_mode="Markdown")
 
+# Set Group Interval
+@bot.message_handler(commands=["set"])
+def set_group_interval(message):
+    if is_user_approved(message.chat.id):
+        args = message.text.split(maxsplit=2)
+        if len(args) < 3:
+            bot.send_message(message.chat.id, "Usage: `/set <group_id> <interval_in_seconds>`", parse_mode="Markdown")
+            return
+        
+        group_id = int(args[1])
+        interval = int(args[2])
+        if group_id in group_list:
+            group_list[group_id] = interval
+            save_ad_message()
+            bot.send_message(message.chat.id, f"✔ Interval Updated: {interval}s for {group_id}", parse_mode="Markdown")
+            send_log(f"✔ Interval Updated for {group_id}: {interval}s")
+        else:
+            bot.send_message(message.chat.id, "✖ Group not found", parse_mode="Markdown")
+
+# Post Ads
+def post_ads():
+    send_log("▪ Posting Ads")
+    for group_id, interval in group_list.items():
+        try:
+            formatted_ad = f"```▪ New Promotion ▪```\n\n{ad_message}"
+            client.send_message(group_id, formatted_ad, parse_mode="Markdown")
+            send_log(f"✔ Ad Sent to {group_id}")
+            time.sleep(10)
+        except FloodWaitError as e:
+            send_log(f"✖ FLOOD_WAIT {e.seconds}s")
+            time.sleep(e.seconds)
+        except Exception as e:
+            send_log(f"✖ Failed to send ad to {group_id}")
+
+# Telegram Bot Commands
 @bot.message_handler(commands=["post"])
 def post_ads_command(message):
-    """Handles /post command."""
     if message.chat.id == OWNER_ID:
-        bot.send_message(message.chat.id, "📢 **Posting Ads...**")
+        bot.send_message(message.chat.id, "▪ Posting Ads")
         post_ads()
-        bot.send_message(message.chat.id, "✅ **Ad Sent to All Groups!**")
+        bot.send_message(message.chat.id, "✔ Ad Sent to All Groups")
 
-# 🌟 Load Data and Start Bot
-load_data()
+# Start Scheduler
+def start_scheduler():
+    send_log("▪ Scheduler Started")
+    schedule_thread = threading.Thread(target=schedule.run_pending, daemon=True)
+    schedule_thread.start()
+
+# Load Data and Start Bot
+load_ad_message()
+load_approved_users()
+start_scheduler()
 bot.polling()
