@@ -1,26 +1,23 @@
 import os
+import time
 import pickle
 import logging
+import telebot
 from dotenv import load_dotenv
-from telethon import TelegramClient, errors
+from telethon.sync import TelegramClient
 from telethon.sessions import StringSession
-from aiogram import Bot, Dispatcher, types
-from aiogram.enums import ParseMode
-from aiogram.client.default import DefaultBotProperties
-from aiogram.types import Message
-from aiogram.filters import Command
-from aiogram.utils.markdown import hbold
-from datetime import datetime
-import time
+from telethon.errors import FloodWaitError
 
 # 🌟 Load Environment Variables
 load_dotenv()
 API_ID = int(os.getenv("API_ID"))
 API_HASH = os.getenv("API_HASH")
-BOT_TOKEN = os.getenv("BOT_TOKEN")
+SESSION_STRING = os.getenv("SESSION_STRING")
+PHONE_NUMBER = os.getenv("PHONE_NUMBER")
+BOT_TOKEN = os.getenv("BOT_TOKEN")  # Telegram Bot Token
 OWNER_ID = int(os.getenv("OWNER_ID"))
 DEFAULT_INTERVAL = int(os.getenv("DEFAULT_INTERVAL", 600))  # Default: 10 min
-DATA_FILE = os.getenv("DATA_FILE", "bot_data.pkl")
+DATA_FILE = "bot_data.pkl"
 
 # 🌟 Logging Setup
 logging.basicConfig(
@@ -30,142 +27,140 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# 🌟 Initialize Aiogram Bot
-bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
-dp = Dispatcher()
+# 🌟 Initialize Telethon Client
+if SESSION_STRING:
+    client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
+else:
+    client = TelegramClient("user_session", API_ID, API_HASH)
+
+# 🌟 Connect to Telegram
+client.connect()
+
+# 🌟 If not authorized, log in manually
+if not client.is_user_authorized():
+    logger.info("🔑 Logging in manually...")
+    client.send_code_request(PHONE_NUMBER)
+    code = input("Enter the login code: ")
+    client.sign_in(PHONE_NUMBER, code)
+
+logger.info("✅ Logged in successfully!")
+
+# 🌟 Initialize Telegram Bot (for management)
+bot = telebot.TeleBot(BOT_TOKEN)
 
 # 🌟 Global Variables
-group_list = {}
-ad_message = "🚀 Boost your business with our exclusive deals! Contact us now!"
-session_strings = {}  # Stores session strings {telegram_id: session_string}
-clients = {}  # Stores Telethon clients {telegram_id: TelegramClient}
+group_list = {}  # Stores group names and intervals
+ad_message = "🚀 Boost your business with exclusive deals! Contact us now!"
 
-# 🌟 Save Data Persistently
-def save_data():
-    with open(DATA_FILE, "wb") as f:
-        pickle.dump({"group_list": group_list, "ad_message": ad_message, "session_strings": session_strings}, f)
-    logger.info("📁 Data Saved Successfully!")
-
-# 🌟 Load Data
+# 🌟 Load Data from File
 def load_data():
-    global group_list, ad_message, session_strings
+    global group_list, ad_message
     if os.path.exists(DATA_FILE):
         with open(DATA_FILE, "rb") as f:
             data = pickle.load(f)
             group_list = data.get("group_list", {})
             ad_message = data.get("ad_message", ad_message)
-            session_strings = data.get("session_strings", {})
         logger.info("📁 Data Loaded Successfully!")
 
-# 🌟 Login Session via Session String
-@dp.message(Command("login_session"))
-def login_session(message: Message):
-    """Logs in using a Telethon session string."""
-    logger.info(f"📩 Received /login_session from {message.from_user.id}")
-    if message.from_user.id == OWNER_ID:
-        args = message.text.split(maxsplit=1)
-        if len(args) < 2:
-            message.answer("⚠️ Usage: `/login_session session_string`")
-            return
-        
-        session_string = args[1].strip()
+# 🌟 Save Data Persistently
+def save_data():
+    with open(DATA_FILE, "wb") as f:
+        pickle.dump({"group_list": group_list, "ad_message": ad_message}, f)
+    logger.info("📁 Data Saved Successfully!")
+
+# 🌟 Fetch Joined Groups Automatically
+def fetch_groups():
+    """Fetch all joined groups and add them to the list."""
+    logger.info("🔍 Fetching joined groups...")
+    group_list.clear()
+    for dialog in client.iter_dialogs():
+        if dialog.is_group:
+            group_list[dialog.id] = DEFAULT_INTERVAL
+            logger.info(f"✅ Added Group: {dialog.name} ({dialog.id})")
+    save_data()
+    return len(group_list)
+
+# 🌟 Post Ads to Groups
+def post_ads():
+    """Sends ads to all joined groups."""
+    logger.info("🚀 Starting Ad Posting...")
+    for group_id in group_list.keys():
         try:
-            client = TelegramClient(StringSession(session_string), API_ID, API_HASH)
-            client.connect()
-            if not client.is_user_authorized():
-                message.answer("⚠️ Invalid Session ID. Please check and try again.")
-                return
-
-            session_strings[message.from_user.id] = session_string
-            clients[message.from_user.id] = client
-            save_data()
-            message.answer("✅ **Session added successfully!** Your ads will now be sent using this Telegram account.")
+            client.send_message(group_id, ad_message)
+            logger.info(f"✅ Ad Sent to {group_id}")
+            time.sleep(10)  # Prevent spam bans
+        except FloodWaitError as e:
+            logger.warning(f"⚠️ FLOOD_WAIT Error! Cooling Down for {e.seconds} Seconds.")
+            time.sleep(e.seconds)  # Wait before retrying
         except Exception as e:
-            logger.error(f"⚠️ Error logging in: {e}")
-            message.answer("⚠️ Error logging in. Please check your session string.")
+            logger.warning(f"⚠️ Failed to send message to {group_id}: {e}")
 
-# 🌟 List Accounts
-@dp.message(Command("list_accounts"))
-def list_accounts(message: Message):
-    """Lists logged-in accounts."""
-    logger.info(f"📩 Received /list_accounts from {message.from_user.id}")
-    if message.from_user.id == OWNER_ID:
-        if not session_strings:
-            message.answer("📂 No accounts logged in yet!")
-        else:
-            accounts = "\n".join([f"🔹 `{tg_id}`" for tg_id in session_strings.keys()])
-            message.answer(f"📂 **Logged-in Accounts:**\n{accounts}")
+# 🌟 Set Ad Message
+def set_ad(new_ad):
+    """Updates the ad message."""
+    global ad_message
+    ad_message = new_ad
+    save_data()
+    logger.info("✅ Ad Message Updated!")
+
+# 🌟 Telegram Bot Commands
+@bot.message_handler(commands=["start"])
+def start(message):
+    """Handles the /start command."""
+    if message.chat.id == OWNER_ID:
+        bot.send_message(message.chat.id, "🌟 Welcome to the Telegram Ad Bot! Use /help for commands.")
     else:
-        message.answer("⚠️ Unauthorized Access!")
+        bot.send_message(message.chat.id, "❌ Unauthorized!")
 
-# 🌟 Set Ad Command
-@dp.message(Command("set_ad"))
-def set_ad(message: Message):
-    """Sets a New Ad Message."""
-    logger.info(f"📩 Received /set_ad from {message.from_user.id}")
-    if message.from_user.id == OWNER_ID:
-        global ad_message
+@bot.message_handler(commands=["help"])
+def help_command(message):
+    """Shows available commands."""
+    if message.chat.id == OWNER_ID:
+        bot.send_message(message.chat.id,
+            "🔹 **Available Commands:**\n"
+            "/fetch_groups - Fetch joined groups\n"
+            "/list_groups - Show all groups\n"
+            "/set_ad <message> - Set new ad message\n"
+            "/post - Post ad to all groups"
+        )
+
+@bot.message_handler(commands=["fetch_groups"])
+def fetch_groups_command(message):
+    """Handles /fetch_groups command."""
+    if message.chat.id == OWNER_ID:
+        count = fetch_groups()
+        bot.send_message(message.chat.id, f"✅ {count} groups fetched successfully!")
+
+@bot.message_handler(commands=["list_groups"])
+def list_groups_command(message):
+    """Handles /list_groups command."""
+    if message.chat.id == OWNER_ID:
+        if not group_list:
+            bot.send_message(message.chat.id, "📂 No groups found! Run /fetch_groups first.")
+        else:
+            groups = "\n".join([f"🔹 `{gid}`" for gid in group_list.keys()])
+            bot.send_message(message.chat.id, f"📂 **Joined Groups:**\n{groups}")
+
+@bot.message_handler(commands=["set_ad"])
+def set_ad_command(message):
+    """Handles /set_ad command."""
+    if message.chat.id == OWNER_ID:
         args = message.text.split(maxsplit=1)
         if len(args) < 2:
-            message.answer("⚠️ Usage: `/set_ad Your Ad Message`")
+            bot.send_message(message.chat.id, "⚠️ Usage: `/set_ad Your Ad Message`")
             return
         
-        ad_message = args[1].strip()
-        save_data()
-        message.answer("✅ **Ad Updated!**")
-    else:
-        message.answer("⚠️ Unauthorized Access!")
+        set_ad(args[1].strip())
+        bot.send_message(message.chat.id, "✅ **Ad Message Updated!**")
 
-# 🌟 Send Message to Group
-def send_message_to_group(client, group):
-    """Sends a message to a group."""
-    try:
-        client.send_message(group, ad_message)
-        logger.info(f"✅ Ad Sent to {group}")
-        return True
-    except errors.FloodWaitError as e:
-        cooldown_time = min(e.seconds, 600)  # Max 10 min cooldown
-        logger.warning(f"⚠️ FLOOD_WAIT Error! Cooling Down for {cooldown_time} Seconds.")
-        time.sleep(cooldown_time)
-        return False
-    except Exception as e:
-        logger.warning(f"⚠️ Error Sending to {group}: {e}")
-        return False
+@bot.message_handler(commands=["post"])
+def post_ads_command(message):
+    """Handles /post command."""
+    if message.chat.id == OWNER_ID:
+        bot.send_message(message.chat.id, "📢 **Posting Ads...**")
+        post_ads()
+        bot.send_message(message.chat.id, "✅ **Ad Sent to All Groups!**")
 
-# 🌟 Post Ad Command (Manual)
-@dp.message(Command("post"))
-def post_ads(message: Message):
-    """Manually Sends Ads to All Groups."""
-    logger.info(f"📩 Received /post from {message.from_user.id}")
-    if message.from_user.id == OWNER_ID:
-        if not clients:
-            message.answer("⚠️ No Telegram sessions logged in! Use `/login_session` first.")
-            return
-        
-        client = clients.get(message.from_user.id)
-        if not client:
-            message.answer("⚠️ No active session for your Telegram ID.")
-            return
-        
-        for group in group_list.keys():
-            send_message_to_group(client, group)
-        message.answer("✅ **Ad Sent to All Groups!**")
-    else:
-        message.answer("⚠️ Unauthorized Access!")
-
-# 🌟 Main Function
-def main():
-    """Start Bot."""
-    load_data()
-    logger.info(f"🚀 Bot Started at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    
-    # ✅ Register Handlers
-    dp.message.register(login_session)
-    dp.message.register(list_accounts)
-    dp.message.register(set_ad)
-    dp.message.register(post_ads)
-
-    dp.run_polling(bot)
-
-if __name__ == "__main__":
-    main()
+# 🌟 Load Data and Start Bot
+load_data()
+bot.polling()
