@@ -13,7 +13,6 @@ load_dotenv()
 API_ID = int(os.getenv("API_ID"))
 API_HASH = os.getenv("API_HASH")
 SESSION_STRING = os.getenv("SESSION_STRING")
-PHONE_NUMBER = os.getenv("PHONE_NUMBER")
 BOT_TOKEN = os.getenv("BOT_TOKEN")  # Telegram Bot Token
 OWNER_ID = int(os.getenv("OWNER_ID"))
 DEFAULT_INTERVAL = int(os.getenv("DEFAULT_INTERVAL", 600))  # Default: 10 min
@@ -27,21 +26,20 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# 🌟 Initialize Telethon Client
+# 🌟 Initialize Telethon Client (No phone required)
 if SESSION_STRING:
     client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
+    logger.info("✅ Using SESSION_STRING for login...")
 else:
-    client = TelegramClient("user_session", API_ID, API_HASH)
+    logger.error("❌ SESSION_STRING is missing! Please generate one.")
 
 # 🌟 Connect to Telegram
 client.connect()
 
-# 🌟 If not authorized, log in manually
+# 🌟 Check if logged in
 if not client.is_user_authorized():
-    logger.info("🔑 Logging in manually...")
-    client.send_code_request(PHONE_NUMBER)
-    code = input("Enter the login code: ")
-    client.sign_in(PHONE_NUMBER, code)
+    logger.error("❌ Session Expired! Generate a new SESSION_STRING.")
+    exit()
 
 logger.info("✅ Logged in successfully!")
 
@@ -50,7 +48,7 @@ bot = telebot.TeleBot(BOT_TOKEN)
 
 # 🌟 Global Variables
 group_list = {}  # Stores group names and intervals
-ad_message = "🚀 Boost your business with exclusive deals! Contact us now!"
+ad_message = os.getenv("DEFAULT_AD_MESSAGE", "🚀 Boost your business now!")
 
 # 🌟 Load Data from File
 def load_data():
@@ -94,14 +92,6 @@ def post_ads():
             time.sleep(e.seconds)  # Wait before retrying
         except Exception as e:
             logger.warning(f"⚠️ Failed to send message to {group_id}: {e}")
-
-# 🌟 Set Ad Message
-def set_ad(new_ad):
-    """Updates the ad message."""
-    global ad_message
-    ad_message = new_ad
-    save_data()
-    logger.info("✅ Ad Message Updated!")
 
 # 🌟 Telegram Bot Commands
 @bot.message_handler(commands=["start"])
@@ -150,7 +140,9 @@ def set_ad_command(message):
             bot.send_message(message.chat.id, "⚠️ Usage: `/set_ad Your Ad Message`")
             return
         
-        set_ad(args[1].strip())
+        global ad_message
+        ad_message = args[1].strip()
+        save_data()
         bot.send_message(message.chat.id, "✅ **Ad Message Updated!**")
 
 @bot.message_handler(commands=["post"])
