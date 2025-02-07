@@ -5,8 +5,10 @@ import logging
 import aiofiles
 from dotenv import load_dotenv
 from aiogram import Bot, Dispatcher, types
-from aiogram.types import ParseMode
-from aiogram.utils import executor
+from aiogram.enums import ParseMode  # ✅ Updated for aiogram v3.x
+from aiogram.types import Message
+from aiogram.filters import Command
+from aiogram.utils.markdown import hbold
 from telethon import TelegramClient, errors
 import random
 
@@ -21,7 +23,7 @@ DATA_FILE = os.getenv("DATA_FILE", "bot_data.pkl")
 
 # 🌟 Initialize Aiogram Bot & Dispatcher
 bot = Bot(token=BOT_TOKEN, parse_mode=ParseMode.HTML)
-dp = Dispatcher(bot)
+dp = Dispatcher()
 
 # 🌟 Logging setup
 logging.basicConfig(level=logging.INFO)
@@ -117,37 +119,37 @@ async def scheduled_ad_posting():
             await asyncio.sleep(interval + random.randint(5, 20))  # Random Jitter to Avoid Spam Detection
 
 # 🌟 Start Command
-@dp.message_handler(commands=["start"])
-async def start_command(message: types.Message):
+@dp.message(Command("start"))
+async def start_command(message: Message):
     """Bot Start Message with UI."""
     if message.from_user.id == OWNER_ID:
-        await message.reply("🌟 **Ad Bot Running!** 🌟\n\nUse `/login session` to add accounts.")
+        await message.answer(f"🌟 **Ad Bot Running!** 🌟\n\nUse {hbold('/login session')} to add accounts.")
     else:
-        await message.reply("⚠️ Unauthorized Access!")
+        await message.answer("⚠️ Unauthorized Access!")
 
 # 🌟 Login Session Command
-@dp.message_handler(commands=["login"])
-async def login_session(message: types.Message):
+@dp.message(Command("login"))
+async def login_session(message: Message):
     """Handles Session File Upload Requests."""
     if message.from_user.id == OWNER_ID:
-        await message.reply("📂 **Upload Your Telethon Session File (.session) Now!**")
+        await message.answer("📂 **Upload Your Telethon Session File (.session) Now!**")
     else:
-        await message.reply("⚠️ Unauthorized Access!")
+        await message.answer("⚠️ Unauthorized Access!")
 
 # 🌟 Receive Session File
-@dp.message_handler(content_types=types.ContentType.DOCUMENT)
-async def receive_session_file(message: types.Message):
+@dp.message(lambda message: message.document is not None)
+async def receive_session_file(message: Message):
     """Handles Session File Upload & Saves It."""
     if message.from_user.id == OWNER_ID:
         document = message.document
         if not document.file_name.endswith(".session"):
-            await message.reply("⚠️ Invalid File Type! Upload a **.session** File Only.")
+            await message.answer("⚠️ Invalid File Type! Upload a **.session** File Only.")
             return
 
         session_file_path = f"./sessions/{document.file_name}"
         os.makedirs("sessions", exist_ok=True)
 
-        file = await bot.download_file_by_id(document.file_id)
+        file = await bot.download(document.file_id)
         async with aiofiles.open(session_file_path, "wb") as f:
             await f.write(file)
 
@@ -155,19 +157,19 @@ async def receive_session_file(message: types.Message):
         save_data()
         await load_sessions()
         
-        await message.reply(f"✅ **Session File {document.file_name} Added Successfully!**")
+        await message.answer(f"✅ **Session File {document.file_name} Added Successfully!**")
     else:
-        await message.reply("⚠️ Unauthorized Access!")
+        await message.answer("⚠️ Unauthorized Access!")
 
 # 🌟 Set Ad Command
-@dp.message_handler(commands=["set_ad"])
-async def set_ad(message: types.Message):
+@dp.message(Command("set_ad"))
+async def set_ad(message: Message):
     """Sets a New Ad Message & Starts Auto Posting."""
     if message.from_user.id == OWNER_ID:
         global ad_message, schedule_task
         args = message.text.split(maxsplit=1)
         if len(args) < 2:
-            await message.reply("⚠️ Usage: `/set_ad Your Ad Message`")
+            await message.answer("⚠️ Usage: `/set_ad Your Ad Message`")
             return
         
         ad_message = args[1].strip()
@@ -178,29 +180,9 @@ async def set_ad(message: types.Message):
 
         schedule_task = asyncio.create_task(scheduled_ad_posting())
 
-        await message.reply("✅ **Ad Updated & Auto Posting Started!**")
-        logger.info(f"Updated Ad: {ad_message}")
+        await message.answer("✅ **Ad Updated & Auto Posting Started!**")
     else:
-        await message.reply("⚠️ Unauthorized Access!")
-
-# 🌟 Manual Ad Posting
-@dp.message_handler(commands=["post"])
-async def post_ads(message: types.Message):
-    """Manually Sends Ads to All Groups."""
-    if message.from_user.id == OWNER_ID:
-        if not clients:
-            await message.reply("⚠️ No Telegram Accounts Available! Use `/login session` First.")
-            return
-
-        for group in group_list.keys():
-            client = clients[random.randint(0, len(clients) - 1)]  # Random Account Selection
-
-            if not await send_message_with_retry(client, group):
-                await asyncio.sleep(10)
-
-        await message.reply("✅ **Ad Manually Sent to All Groups!**")
-    else:
-        await message.reply("⚠️ Unauthorized Access!")
+        await message.answer("⚠️ Unauthorized Access!")
 
 # 🌟 Main Function
 async def main():
@@ -211,7 +193,7 @@ async def main():
     global schedule_task
     schedule_task = asyncio.create_task(scheduled_ad_posting())
 
-    executor.start_polling(dp)
+    await dp.start_polling(bot)
 
 if __name__ == "__main__":
     asyncio.run(main())
