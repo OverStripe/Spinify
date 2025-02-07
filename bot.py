@@ -7,7 +7,7 @@ from dotenv import load_dotenv
 from aiogram import Bot, Dispatcher, types
 from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
-from aiogram.types import Message
+from aiogram.types import Message, Document
 from aiogram.filters import Command
 from aiogram.utils.markdown import hbold
 from telethon import TelegramClient, errors
@@ -38,7 +38,6 @@ dp = Dispatcher()
 # 🌟 Global Variables
 group_list = {}
 ad_message = "🚀 Boost your business with our exclusive deals! Contact us now!"
-schedule_task = None
 session_files = []  # Available session files
 clients = []  # Telethon clients
 cooldown_time = 60  # Cooldown for FLOOD errors
@@ -147,7 +146,7 @@ async def login_session(message: Message):
 async def set_ad(message: Message):
     """Sets a New Ad Message & Starts Auto Posting."""
     if message.from_user.id == OWNER_ID:
-        global ad_message, schedule_task
+        global ad_message
         args = message.text.split(maxsplit=1)
         if len(args) < 2:
             await message.answer("⚠️ Usage: `/set_ad Your Ad Message`")
@@ -156,30 +155,30 @@ async def set_ad(message: Message):
         ad_message = args[1].strip()
         save_data()
 
-        if schedule_task:
-            schedule_task.cancel()
-
-        schedule_task = asyncio.create_task(scheduled_ad_posting())
-
         await message.answer("✅ **Ad Updated & Auto Posting Started!**")
     else:
         await message.answer("⚠️ Unauthorized Access!")
 
+# 🌟 Post Ad Command (Manual)
+@dp.message(Command("post"))
+async def post_ads(message: Message):
+    """Manually Sends Ads to All Groups."""
+    if message.from_user.id == OWNER_ID:
+        for group in group_list.keys():
+            client = random.choice(clients) if clients else default_client
+            await send_message_with_retry(client, group)
+        await message.answer("✅ **Ad Manually Sent to All Groups!**")
+    else:
+        await message.answer("⚠️ Unauthorized Access!")
+
 # 🌟 Main Function
-def main():
+async def main():
     """Start Bot & Run Tasks."""
     load_data()
-    asyncio.run(load_sessions())
-
-    global schedule_task
-    schedule_task = asyncio.create_task(scheduled_ad_posting())
-
-    # Log bot startup time
-    startup_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    logger.info(f"🚀 Bot Started at {startup_time}")
-
-    import aiogram
-    aiogram.executor.start_polling(dp, skip_updates=True)
+    await load_sessions()
+    logger.info(f"🚀 Bot Started at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    asyncio.create_task(scheduled_ad_posting())
+    await dp.start_polling(bot)
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
