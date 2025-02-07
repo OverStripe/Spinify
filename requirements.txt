@@ -1,6 +1,4 @@
-telethon>=1.38.1
-aiogram>=3.7.0
-python-dotenv>=1.0.1
-aiofiles>=24.1.0
+telethon==1.38.1
+python-dotenv==1.0.1
+pyTelegramBotAPI==4.15.4
 
-  
