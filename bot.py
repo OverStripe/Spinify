@@ -11,6 +11,7 @@ from aiogram.types import Message
 from aiogram.filters import Command
 from aiogram.utils.markdown import hbold
 from telethon import TelegramClient, errors
+from telethon.sessions import StringSession
 import random
 from datetime import datetime
 
@@ -36,89 +37,67 @@ bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTM
 dp = Dispatcher()
 
 # 🌟 Global Variables
-group_list = {}  # Group IDs with posting intervals
+group_list = {}
 ad_message = "🚀 Boost your business with our exclusive deals! Contact us now!"
-session_files = []  # Available session files
-clients = []  # Telethon clients
+session_strings = {}  # Stores session strings {telegram_id: session_string}
+clients = {}  # Stores Telethon clients {telegram_id: TelegramClient}
 cooldown_time = 60  # Cooldown for FLOOD errors
 
-# 🌟 Load Data from File
+# 🌟 Save Data Persistently
+def save_data():
+    with open(DATA_FILE, "wb") as f:
+        pickle.dump({"group_list": group_list, "ad_message": ad_message, "session_strings": session_strings}, f)
+    logger.info("📁 Data Saved Successfully!")
+
+# 🌟 Load Data
 def load_data():
-    global group_list, ad_message, session_files
+    global group_list, ad_message, session_strings
     if os.path.exists(DATA_FILE):
         with open(DATA_FILE, "rb") as f:
             data = pickle.load(f)
             group_list = data.get("group_list", {})
             ad_message = data.get("ad_message", ad_message)
-            session_files = data.get("session_files", [])
+            session_strings = data.get("session_strings", {})
         logger.info("📁 Data Loaded Successfully!")
 
-# 🌟 Save Data Persistently
-def save_data():
-    with open(DATA_FILE, "wb") as f:
-        pickle.dump({"group_list": group_list, "ad_message": ad_message, "session_files": session_files}, f)
-    logger.info("📁 Data Saved Successfully!")
-
-# 🌟 Add Group Command
-@dp.message(Command("add_group"))
-async def add_group(message: Message):
-    """Adds a group to the list."""
-    logger.info(f"📩 Received /add_group from {message.from_user.id}")
+# 🌟 Login Session via Session String
+@dp.message(Command("login_session"))
+async def login_session(message: Message):
+    """Logs in using a Telethon session string."""
+    logger.info(f"📩 Received /login_session from {message.from_user.id}")
     if message.from_user.id == OWNER_ID:
-        args = message.text.split()
+        args = message.text.split(maxsplit=1)
         if len(args) < 2:
-            await message.answer("⚠️ Usage: `/add_group group_id`")
+            await message.answer("⚠️ Usage: `/login_session session_string`")
             return
         
-        group_id = args[1]
-        group_list[group_id] = DEFAULT_INTERVAL
-        save_data()
-        await message.answer(f"✅ Group `{group_id}` added successfully!")
-    else:
-        await message.answer("⚠️ Unauthorized Access!")
+        session_string = args[1].strip()
+        try:
+            client = TelegramClient(StringSession(session_string), API_ID, API_HASH)
+            await client.connect()
+            if not await client.is_user_authorized():
+                await message.answer("⚠️ Invalid Session ID. Please check and try again.")
+                return
 
-# 🌟 Remove Group Command
-@dp.message(Command("remove_group"))
-async def remove_group(message: Message):
-    """Removes a group from the list."""
-    logger.info(f"📩 Received /remove_group from {message.from_user.id}")
-    if message.from_user.id == OWNER_ID:
-        args = message.text.split()
-        if len(args) < 2:
-            await message.answer("⚠️ Usage: `/remove_group group_id`")
-            return
-        
-        group_id = args[1]
-        if group_id in group_list:
-            del group_list[group_id]
+            session_strings[message.from_user.id] = session_string
+            clients[message.from_user.id] = client
             save_data()
-            await message.answer(f"✅ Group `{group_id}` removed successfully!")
-        else:
-            await message.answer("⚠️ Group not found!")
-    else:
-        await message.answer("⚠️ Unauthorized Access!")
+            await message.answer("✅ **Session added successfully!** Your ads will now be sent using this Telegram account.")
+        except Exception as e:
+            logger.error(f"⚠️ Error logging in: {e}")
+            await message.answer("⚠️ Error logging in. Please check your session string.")
 
-# 🌟 List Groups Command
-@dp.message(Command("list_groups"))
-async def list_groups(message: Message):
-    """Lists all groups."""
-    logger.info(f"📩 Received /list_groups from {message.from_user.id}")
+# 🌟 List Accounts
+@dp.message(Command("list_accounts"))
+async def list_accounts(message: Message):
+    """Lists logged-in accounts."""
+    logger.info(f"📩 Received /list_accounts from {message.from_user.id}")
     if message.from_user.id == OWNER_ID:
-        if not group_list:
-            await message.answer("📂 No groups added yet!")
+        if not session_strings:
+            await message.answer("📂 No accounts logged in yet!")
         else:
-            groups = "\n".join([f"🔹 `{group}`" for group in group_list.keys()])
-            await message.answer(f"📂 **Registered Groups:**\n{groups}")
-    else:
-        await message.answer("⚠️ Unauthorized Access!")
-
-# 🌟 Start Command
-@dp.message(Command("start"))
-async def start_command(message: Message):
-    """Bot Start Message."""
-    logger.info(f"📩 Received /start from {message.from_user.id}")
-    if message.from_user.id == OWNER_ID:
-        await message.answer(f"🌟 **Ad Bot Running!** 🌟\n\nUse `/list_groups` to view all groups.")
+            accounts = "\n".join([f"🔹 `{tg_id}`" for tg_id in session_strings.keys()])
+            await message.answer(f"📂 **Logged-in Accounts:**\n{accounts}")
     else:
         await message.answer("⚠️ Unauthorized Access!")
 
@@ -140,14 +119,40 @@ async def set_ad(message: Message):
     else:
         await message.answer("⚠️ Unauthorized Access!")
 
+# 🌟 Send Message with Retry
+async def send_message_with_retry(client, group):
+    """Sends a message with error handling & cooldowns."""
+    global cooldown_time
+    try:
+        await client.send_message(group, ad_message)
+        logger.info(f"✅ Ad Sent to {group}")
+        return True
+    except errors.FloodWaitError as e:
+        cooldown_time = min(e.seconds, 600)  # Max 10 min cooldown
+        logger.warning(f"⚠️ FLOOD_WAIT Error! Cooling Down for {cooldown_time} Seconds.")
+        await asyncio.sleep(cooldown_time)
+        return False
+    except Exception as e:
+        logger.warning(f"⚠️ Error Sending to {group}: {e}")
+        return False
+
 # 🌟 Post Ad Command (Manual)
 @dp.message(Command("post"))
 async def post_ads(message: Message):
     """Manually Sends Ads to All Groups."""
     logger.info(f"📩 Received /post from {message.from_user.id}")
     if message.from_user.id == OWNER_ID:
+        if not clients:
+            await message.answer("⚠️ No Telegram sessions logged in! Use `/login_session` first.")
+            return
+        
+        client = clients.get(message.from_user.id)
+        if not client:
+            await message.answer("⚠️ No active session for your Telegram ID.")
+            return
+        
         for group in group_list.keys():
-            await message.answer(f"📢 **Posting Ad in:** `{group}`")
+            await send_message_with_retry(client, group)
         await message.answer("✅ **Ad Sent to All Groups!**")
     else:
         await message.answer("⚠️ Unauthorized Access!")
@@ -158,15 +163,22 @@ async def main():
     load_data()
     logger.info(f"🚀 Bot Started at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
-    # ✅ Register Commands
-    dp.message.register(start_command)
-    dp.message.register(add_group)
-    dp.message.register(remove_group)
-    dp.message.register(list_groups)
+    # ✅ Register Handlers
+    dp.message.register(login_session)
+    dp.message.register(list_accounts)
     dp.message.register(set_ad)
     dp.message.register(post_ads)
 
     await dp.run_polling(bot)
 
+# ✅ **Prevent RuntimeError: asyncio.run() cannot be called from a running event loop**
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            logger.warning("⚠️ Event loop already running. Using create_task().")
+            loop.create_task(main())
+        else:
+            loop.run_until_complete(main())
+    except RuntimeError:
+        asyncio.run(main())
