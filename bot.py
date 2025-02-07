@@ -5,7 +5,8 @@ import logging
 import aiofiles
 from dotenv import load_dotenv
 from aiogram import Bot, Dispatcher, types
-from aiogram.enums import ParseMode  # ✅ Updated for aiogram v3.x
+from aiogram.enums import ParseMode
+from aiogram.client.default import DefaultBotProperties  # ✅ Fix for aiogram 3.7+
 from aiogram.types import Message
 from aiogram.filters import Command
 from aiogram.utils.markdown import hbold
@@ -22,7 +23,10 @@ DEFAULT_INTERVAL = int(os.getenv("DEFAULT_INTERVAL", 600))  # Default: 10 min
 DATA_FILE = os.getenv("DATA_FILE", "bot_data.pkl")
 
 # 🌟 Initialize Aiogram Bot & Dispatcher
-bot = Bot(token=BOT_TOKEN, parse_mode=ParseMode.HTML)
+bot = Bot(
+    token=BOT_TOKEN,
+    default=DefaultBotProperties(parse_mode=ParseMode.HTML)  # ✅ Fix for aiogram 3.7+
+)
 dp = Dispatcher()
 
 # 🌟 Logging setup
@@ -133,31 +137,6 @@ async def login_session(message: Message):
     """Handles Session File Upload Requests."""
     if message.from_user.id == OWNER_ID:
         await message.answer("📂 **Upload Your Telethon Session File (.session) Now!**")
-    else:
-        await message.answer("⚠️ Unauthorized Access!")
-
-# 🌟 Receive Session File
-@dp.message(lambda message: message.document is not None)
-async def receive_session_file(message: Message):
-    """Handles Session File Upload & Saves It."""
-    if message.from_user.id == OWNER_ID:
-        document = message.document
-        if not document.file_name.endswith(".session"):
-            await message.answer("⚠️ Invalid File Type! Upload a **.session** File Only.")
-            return
-
-        session_file_path = f"./sessions/{document.file_name}"
-        os.makedirs("sessions", exist_ok=True)
-
-        file = await bot.download(document.file_id)
-        async with aiofiles.open(session_file_path, "wb") as f:
-            await f.write(file)
-
-        session_files.append(session_file_path)
-        save_data()
-        await load_sessions()
-        
-        await message.answer(f"✅ **Session File {document.file_name} Added Successfully!**")
     else:
         await message.answer("⚠️ Unauthorized Access!")
 
