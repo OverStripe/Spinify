@@ -1,162 +1,173 @@
-import os
+import asyncio
 import time
-import pickle
-import logging
-import telebot
-import schedule
-import threading
-from dotenv import load_dotenv
+import sqlite3
+from datetime import datetime
+from pyrogram import Client, filters
+from pyrogram.types import Message
 from telethon.sync import TelegramClient
 from telethon.sessions import StringSession
-from telethon.errors import FloodWaitError
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-# Load Environment Variables
-load_dotenv()
-API_ID = int(os.getenv("API_ID"))
-API_HASH = os.getenv("API_HASH")
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-OWNER_ID = int(os.getenv("OWNER_ID"))
-DEFAULT_INTERVAL = int(os.getenv("DEFAULT_INTERVAL", 600))
-LOG_CHAT_ID = int(os.getenv("LOG_CHAT_ID"))
-DATA_FILE = "bot_data.pkl"
-SESSION_FILE = "session.pkl"
-APPROVED_USERS_FILE = "approved_users.pkl"
+# Configuration
+API_ID = "your_api_id"
+API_HASH = "your_api_hash"
+BOT_TOKEN = "7076580983:AAG-ksR-tsvXEM3L2eEGl1qPv2OXB0ezJls"
+OWNER_ID = 7222795580  # Replace with your Telegram ID
+DEFAULT_INTERVAL = 10  # Default posting interval (minutes)
 
-# Initialize Telegram Bot
-bot = telebot.TeleBot(BOT_TOKEN)
+# Database Setup
+conn = sqlite3.connect("ads_bot.db")
+cursor = conn.cursor()
 
-# Logging Setup
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+cursor.execute("CREATE TABLE IF NOT EXISTS group_intervals (group_id TEXT PRIMARY KEY, interval_minutes INTEGER DEFAULT 10)")
+cursor.execute("CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY, session_string TEXT)")
+cursor.execute("CREATE TABLE IF NOT EXISTS ads (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, ad_text TEXT, next_post_time INTEGER)")
+cursor.execute("CREATE TABLE IF NOT EXISTS groups (group_id TEXT PRIMARY KEY)")
+cursor.execute("CREATE TABLE IF NOT EXISTS approved_users (user_id INTEGER PRIMARY KEY)")
 
-def send_log(message):
-    """Sends logs to Telegram Chat"""
-    try:
-        bot.send_message(LOG_CHAT_ID, f"▪ **LOG:** {message}", parse_mode="Markdown")
-    except Exception as e:
-        print(f"ERROR: Failed to send log: {e}")
+conn.commit()
+conn.close()
 
-# Global Variables
-client = None
-group_list = {}
-ad_message = os.getenv("DEFAULT_AD_MESSAGE", "▪ New Promotion ▪\n\nBoost your business! Contact @YourUsername")
-approved_users = set()
+# Bot Setup
+bot = Client("ads_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
-# Load Approved Users
-def load_approved_users():
-    global approved_users
-    if os.path.exists(APPROVED_USERS_FILE):
-        with open(APPROVED_USERS_FILE, "rb") as f:
-            approved_users = pickle.load(f)
-    send_log("✔ Approved Users Loaded")
+# Async Task Scheduler
+scheduler = AsyncIOScheduler()
 
-# Save Approved Users
-def save_approved_users():
-    with open(APPROVED_USERS_FILE, "wb") as f:
-        pickle.dump(approved_users, f)
-    send_log("✔ Approved Users Updated")
+# ----------------------------------
+#  🚀 COMMANDS
+# ----------------------------------
 
-# Approve New Users
-@bot.message_handler(commands=["approve"])
-def approve_user(message):
-    if message.chat.id == OWNER_ID:
-        args = message.text.split(maxsplit=1)
-        if len(args) < 2:
-            bot.send_message(message.chat.id, "Usage: `/approve <user_id>`", parse_mode="Markdown")
-            return
-        
-        user_id = int(args[1].strip())
-        approved_users.add(user_id)
-        save_approved_users()
-        bot.send_message(message.chat.id, f"✔ User {user_id} Approved", parse_mode="Markdown")
-        send_log(f"✔ User {user_id} Approved by Owner")
-    else:
-        bot.send_message(message.chat.id, "✖ You are not authorized", parse_mode="Markdown")
+@bot.on_message(filters.command("start") & filters.private)
+async def start_command(_, message: Message):
+    await message.reply_text("🚀 **Welcome!**\nThis bot auto-posts ads using your Telegram accounts.\n\nUse `/help` to see available commands.")
 
-# Check if User is Approved
-def is_user_approved(user_id):
-    return user_id in approved_users or user_id == OWNER_ID
+@bot.on_message(filters.command("help") & filters.private)
+async def help_command(_, message: Message):
+    help_text = """
+🚀 **Command List**
+🔹 `/start` - Welcome message
+🔹 `/help` - Show available commands
+🔹 `/addaccount {session_string}` - Add Telegram account
+🔹 `/schedule {ad_message}` - Schedule an ad
+🔹 `/myschedule` - View scheduled ads
+🔹 `/cancel {ad_id}` - Cancel an ad
+🔹 `/profile` - View linked accounts
+🔹 `/setinterval {group_id} {minutes}` - Set group interval (Admin)
+🔹 `/addgroup {group_id}` - Add a group (Admin)
+🔹 `/getinterval {group_id}` - Check group interval (Admin)
+🔹 `/listgroups` - View all groups (Admin)
+🔹 `/approve {user_id}` - Approve a user (Admin)
+"""
+    await message.reply_text(help_text)
 
-# Save & Load Ad Message
-def save_ad_message():
-    with open(DATA_FILE, "wb") as f:
-        pickle.dump({"group_list": group_list, "ad_message": ad_message}, f)
-    send_log("✔ Ad Message Updated")
+@bot.on_message(filters.command("addaccount") & filters.private)
+async def add_account(_, message: Message):
+    args = message.text.split(" ", 1)
+    if len(args) < 2:
+        return await message.reply("⚠️ Usage: `/addaccount {session_string}`")
+    session_string = args[1]
+    user_id = message.from_user.id
 
-def load_ad_message():
-    global ad_message
-    if os.path.exists(DATA_FILE):
-        with open(DATA_FILE, "rb") as f:
-            data = pickle.load(f)
-            ad_message = data.get("ad_message", ad_message)
+    conn = sqlite3.connect("ads_bot.db")
+    cursor = conn.cursor()
+    cursor.execute("INSERT OR REPLACE INTO users (user_id, session_string) VALUES (?, ?)", (user_id, session_string))
+    conn.commit()
+    conn.close()
 
-# Set Ad Message
-@bot.message_handler(commands=["set_ad"])
-def set_ad_command(message):
-    if message.chat.id == OWNER_ID:
-        args = message.text.split(maxsplit=1)
-        if len(args) < 2:
-            bot.send_message(message.chat.id, "Usage: `/set_ad <message>`", parse_mode="Markdown")
-            return
-        
-        global ad_message
-        ad_message = args[1].strip()
-        save_ad_message()
-        bot.send_message(message.chat.id, "✔ Ad Message Updated")
-        send_log(f"✔ New Ad Message Set:\n{ad_message}")
-    else:
-        bot.send_message(message.chat.id, "✖ You are not authorized", parse_mode="Markdown")
+    await message.reply("✅ **Account added successfully!** You can now schedule ads.")
 
-# Set Group Interval
-@bot.message_handler(commands=["set"])
-def set_group_interval(message):
-    if is_user_approved(message.chat.id):
-        args = message.text.split(maxsplit=2)
-        if len(args) < 3:
-            bot.send_message(message.chat.id, "Usage: `/set <group_id> <interval_in_seconds>`", parse_mode="Markdown")
-            return
-        
-        group_id = int(args[1])
-        interval = int(args[2])
-        if group_id in group_list:
-            group_list[group_id] = interval
-            save_ad_message()
-            bot.send_message(message.chat.id, f"✔ Interval Updated: {interval}s for {group_id}", parse_mode="Markdown")
-            send_log(f"✔ Interval Updated for {group_id}: {interval}s")
-        else:
-            bot.send_message(message.chat.id, "✖ Group not found", parse_mode="Markdown")
+@bot.on_message(filters.command("schedule") & filters.private)
+async def schedule_ad(_, message: Message):
+    args = message.text.split(" ", 1)
+    if len(args) < 2:
+        return await message.reply("⚠️ Usage: `/schedule {ad_message}`")
 
-# Post Ads
-def post_ads():
-    send_log("▪ Posting Ads")
-    for group_id, interval in group_list.items():
-        try:
-            formatted_ad = f"```▪ New Promotion ▪```\n\n{ad_message}"
-            client.send_message(group_id, formatted_ad, parse_mode="Markdown")
-            send_log(f"✔ Ad Sent to {group_id}")
-            time.sleep(10)
-        except FloodWaitError as e:
-            send_log(f"✖ FLOOD_WAIT {e.seconds}s")
-            time.sleep(e.seconds)
-        except Exception as e:
-            send_log(f"✖ Failed to send ad to {group_id}")
+    user_id = message.from_user.id
+    ad_text = args[1]
+    next_post_time = int(time.time())
 
-# Telegram Bot Commands
-@bot.message_handler(commands=["post"])
-def post_ads_command(message):
-    if message.chat.id == OWNER_ID:
-        bot.send_message(message.chat.id, "▪ Posting Ads")
-        post_ads()
-        bot.send_message(message.chat.id, "✔ Ad Sent to All Groups")
+    conn = sqlite3.connect("ads_bot.db")
+    cursor = conn.cursor()
+    cursor.execute("INSERT INTO ads (user_id, ad_text, next_post_time) VALUES (?, ?, ?)", (user_id, ad_text, next_post_time))
+    conn.commit()
+    conn.close()
 
-# Start Scheduler
-def start_scheduler():
-    send_log("▪ Scheduler Started")
-    schedule_thread = threading.Thread(target=schedule.run_pending, daemon=True)
-    schedule_thread.start()
+    await message.reply("✅ **Ad scheduled for auto-posting!**")
 
-# Load Data and Start Bot
-load_ad_message()
-load_approved_users()
-start_scheduler()
-bot.polling()
+@bot.on_message(filters.command("setinterval") & filters.private)
+async def set_interval(_, message: Message):
+    if message.from_user.id != OWNER_ID:
+        return await message.reply("❌ Only the bot owner can set group intervals.")
+
+    args = message.text.split(" ", 2)
+    if len(args) < 3:
+        return await message.reply("⚠️ Usage: `/setinterval {group_id} {minutes}`")
+
+    group_id, interval_minutes = args[1], int(args[2])
+    conn = sqlite3.connect("ads_bot.db")
+    cursor = conn.cursor()
+    cursor.execute("INSERT OR REPLACE INTO group_intervals (group_id, interval_minutes) VALUES (?, ?)", (group_id, interval_minutes))
+    conn.commit()
+    conn.close()
+
+    await message.reply(f"✅ **Interval for Group `{group_id}` set to {interval_minutes} minutes!**")
+
+@bot.on_message(filters.command("listgroups") & filters.private)
+async def list_groups(_, message: Message):
+    conn = sqlite3.connect("ads_bot.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT group_id FROM groups")
+    groups = cursor.fetchall()
+    conn.close()
+
+    if not groups:
+        return await message.reply("⚠️ No groups available.")
+
+    group_list = "\n".join([f"📌 {g[0]}" for g in groups])
+    await message.reply(f"📌 **Groups List:**\n\n{group_list}")
+
+# ----------------------------------
+#  🚀 AUTO POSTING FUNCTION
+# ----------------------------------
+
+async def auto_post_ads():
+    while True:
+        conn = sqlite3.connect("ads_bot.db")
+        cursor = conn.cursor()
+
+        current_time = int(time.time())
+        cursor.execute("SELECT id, user_id, ad_text FROM ads WHERE next_post_time <= ?", (current_time,))
+        ads = cursor.fetchall()
+        cursor.execute("SELECT group_id FROM groups")
+        groups = cursor.fetchall()
+        conn.close()
+
+        if ads and groups:
+            for ad in ads:
+                ad_id, user_id, ad_text = ad
+
+                conn = sqlite3.connect("ads_bot.db")
+                cursor = conn.cursor()
+                cursor.execute("SELECT session_string FROM users WHERE user_id = ?", (user_id,))
+                user_sessions = cursor.fetchall()
+                conn.close()
+
+                if user_sessions:
+                    for session in user_sessions:
+                        async with TelegramClient(StringSession(session[0]), API_ID, API_HASH) as client:
+                            for group in groups:
+                                group_id = group[0]
+                                cursor.execute("SELECT interval_minutes FROM group_intervals WHERE group_id = ?", (group_id,))
+                                interval_minutes = cursor.fetchone()[0] if cursor.fetchone() else DEFAULT_INTERVAL
+                                await client.send_message(int(group_id), ad_text)
+                                await asyncio.sleep(interval_minutes * 60)
+
+        await asyncio.sleep(60)
+
+# Start Auto Posting
+scheduler.add_job(auto_post_ads, "interval", seconds=60)
+scheduler.start()
+
+# Start the bot
+bot.run()
