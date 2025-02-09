@@ -9,8 +9,8 @@ from telethon.sessions import StringSession
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 # Configuration
-API_ID = "your_api_id"
-API_HASH = "your_api_hash"
+API_ID = "22318470"
+API_HASH = "cf907c4c2d677b9f67d32828d891e97a"
 BOT_TOKEN = "7076580983:AAG-ksR-tsvXEM3L2eEGl1qPv2OXB0ezJls"
 OWNER_ID = 7222795580  # Replace with your Telegram ID
 DEFAULT_INTERVAL = 10  # Default posting interval (minutes)
